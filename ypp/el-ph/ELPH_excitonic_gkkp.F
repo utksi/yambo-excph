@@ -4,13 +4,17 @@
 ! Copyright (C) 2020 The Yambo Team
 !
 ! Authors (see AUTHORS file for details): AM
+! Note: if BSE wave-function phases (WF_phase) are absent the
+!       electron-phonon couplings are used as provided and phase
+!       factors default to unity.
 !
 subroutine ELPH_excitonic_gkkp(Xk)
  !
  use pars,                ONLY:SP,schlen,cZERO
  use units,               ONLY:HA2EV,HA2FSm1
- use BS_solvers,          ONLY:BS_mat,BSS_eh_table
- use BS,                  ONLY:BS_K_dim,BS_nT_at_k
+use BS_solvers,          ONLY:BS_mat
+use BS,                  ONLY:BS_K_dim,BS_nT_at_k,WF_phase,BSS_eh_table
+use electrons,           ONLY:spin
  use ELPH_intfcs,         ONLY:ELPH_alloc
  use R_lattice,           ONLY:bz_samp
  use IO_int,              ONLY:io_control
@@ -31,7 +35,9 @@ subroutine ELPH_excitonic_gkkp(Xk)
  ! Work Space
  !
  integer                   ::neh1,ic1,iv1,ik_bz1,ik_ibz,ID,IO_ACT,io_err,iq,ikk,&
-&                            neh2,ic2,iv2,ik_bz2,i_lambda,lambda,i_l
+&                            neh2,ic2,iv2,ik_bz2,i_lambda,lambda,i_l,isym
+ integer                   ::sp_c1,sp_v1,sp_c2,sp_v2
+ complex(SP)               ::phase_c,phase_v,corrected
  complex(SP), allocatable  ::diagonal_xhi(:,:,:)
  real(SP),    allocatable  ::ph_freqs(:)
  real(SP)                  ::gkkp_fs
@@ -42,12 +48,14 @@ subroutine ELPH_excitonic_gkkp(Xk)
  call section("+","Excitonic GKKP factors")
  !
  call io_control(ACTION=OP_RD,SEC=(/1/),MODE=DUMP,ID=ID)
- io_err=io_ELPH(ID,'gkkp')
- if (io_err/=0.or.elph_use_q_grid) return
- !
- YAMBO_ALLOC(diagonal_xhi,(elph_nQ,ph_modes,EXCITONS_n_user_states))
- YAMBO_ALLOC(ph_freqs,(ph_modes))
- diagonal_xhi = cZERO
+  io_err=io_ELPH(ID,'gkkp')
+  if (io_err/=0.or.elph_use_q_grid) return
+  !
+  YAMBO_ALLOC(diagonal_xhi,(elph_nQ,ph_modes,EXCITONS_n_user_states))
+  YAMBO_ALLOC(ph_freqs,(ph_modes))
+  if (.not. allocated(WF_phase)) &
+       call warning('WF_phase not found: unity phase factors applied')
+  diagonal_xhi = cZERO
  !
  ! Fill locally BS_blk_dim
  !
@@ -85,24 +93,41 @@ subroutine ELPH_excitonic_gkkp(Xk)
        !
        do neh1=1,BS_nT_at_k(ik_ibz)
           !
-          ik_bz1= BSS_eh_table(ikk+neh1,1)
-          iv1   = BSS_eh_table(ikk+neh1,2)
-          ic1   = BSS_eh_table(ikk+neh1,3)
+         ik_bz1= BSS_eh_table(ikk+neh1,1)
+         iv1   = BSS_eh_table(ikk+neh1,2)
+         ic1   = BSS_eh_table(ikk+neh1,3)
+         sp_c1 = BSS_eh_table(ikk+neh1,4)
+         sp_v1 = BSS_eh_table(ikk+neh1,5)
+         ik_ibz = Xk%sstar(ik_bz1,1)
+         isym   = Xk%sstar(ik_bz1,2)
           !
           do neh2=1,BS_nT_at_k(ik_ibz)
             !
             ik_bz2= BSS_eh_table(ikk+neh2,1)
             iv2   = BSS_eh_table(ikk+neh2,2)
             ic2   = BSS_eh_table(ikk+neh2,3)
+            sp_c2 = BSS_eh_table(ikk+neh2,4)
+            sp_v2 = BSS_eh_table(ikk+neh2,5)
             !
             if (ik_bz1/=ik_bz2) cycle
+            !
+            ! Default to unity if no phase information is available
+            phase_c=1._SP
+            phase_v=1._SP
+            if (allocated(WF_phase)) then
+              phase_c=WF_phase(ik_ibz,isym,ic1,sp_c1)
+              phase_v=WF_phase(ik_ibz,isym,iv1,sp_v1)
+              if (phase_c==cZERO .or. phase_c==-99._SP) phase_c=1._SP
+              if (phase_v==cZERO .or. phase_v==-99._SP) phase_v=1._SP
+            endif
             !
             if (iv1==iv2) then
               !
               do i_l=1,ph_modes
+                corrected = GKKP%dVc(i_l,ic2,ic1,ik_bz1,1)*phase_c
                 diagonal_xhi(iq,i_l,i_lambda)= diagonal_xhi(iq,i_l,i_lambda)- &
-&                           conjg(BS_mat(lambda,ikk+neh2))*BS_mat(lambda,ikk+neh1) * &
-&                           GKKP%dVc(i_l,ic2,ic1,ik_bz1,1)/sqrt(2._SP*ph_freqs(i_l))
+                           conjg(BS_mat(lambda,ikk+neh2))*BS_mat(lambda,ikk+neh1) * &
+                           corrected/sqrt(2._SP*ph_freqs(i_l))
               enddo
               !
             endif
@@ -110,9 +135,10 @@ subroutine ELPH_excitonic_gkkp(Xk)
             if (ic1==ic2) then
               !
               do i_l=1,ph_modes
+                corrected = GKKP%dVc(i_l,iv2,iv1,ik_bz1,1)*phase_v
                 diagonal_xhi(iq,i_l,i_lambda)= diagonal_xhi(iq,i_l,i_lambda)+ &
-&                           conjg(BS_mat(lambda,ikk+neh2))*BS_mat(lambda,ikk+neh1) * &
-&                           GKKP%dVc(i_l,iv2,iv1,ik_bz1,1)/sqrt(2._SP*ph_freqs(i_l))
+                           conjg(BS_mat(lambda,ikk+neh2))*BS_mat(lambda,ikk+neh1) * &
+                           corrected/sqrt(2._SP*ph_freqs(i_l))
               enddo
               !
             endif
