@@ -67,8 +67,8 @@ open(GIT, $gitcommand);
 $rinamefiles = <GIT>;
 close(GIT);
 # Strip the "src/" (add to this list if needed)
+$rinamefiles =~ s/^\s+|\s+$//g if $rinamefiles;
 if ($rinamefiles) {
-print "$rinamefiles\n\n";
 $rinamefiles =~ s/  / /g;
 $rinamefiles =~ s/src\///g;
 $rinamefiles =~ s/interfaces\///g;
