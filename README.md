@@ -31,3 +31,6 @@ Please refer to the AUTHORS file
 
 ## Known Issues
 Please refer to the ISSUES file
+* When the BSE phase file (`WF_phase`) is not found, excitonic
+  electron-phonon couplings use unity phase factors and a warning is
+  printed at runtime.
